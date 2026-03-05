@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ethics by Design</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+
+<div class="main-layout">
+    <!-- Top bar -->
+    <header class="top-bar">
+        <div class="top-bar-left">
+            <button id="sidebarToggle" class="btn-icon sidebar-toggle" title="Toggle history">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            </button>
+            <span class="brand">Ethics by Design</span>
+        </div>
+        <div class="user-info">
+            <span id="userEmail">Loading…</span>
+            <button id="logoutBtn" class="btn btn-sm btn-primary">Logout</button>
+        </div>
+    </header>
+
+    <!-- App body: sidebar + center + config -->
+    <div class="app-body">
+
+        <!-- ── History sidebar ─────────────────────────────────── -->
+        <aside id="historySidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h3>History</h3>
+                <button id="newTranscriptBtn" class="btn btn-sm btn-primary">+ New</button>
+            </div>
+            <div class="sidebar-search">
+                <input id="historySearch" type="text" placeholder="Search transcripts…" />
+            </div>
+            <ul id="historyList" class="history-list">
+                <!-- filled by JS -->
+            </ul>
+        </aside>
+
+        <!-- ── Center: Upload + Result ─────────────────────────── -->
+        <main class="center-panel">
+            <div class="card upload-card">
+                <h2>Upload Audio</h2>
+                <p class="text-muted">Select an audio file to transcribe</p>
+
+                <div id="dropZone" class="drop-zone">
+                    <svg class="drop-zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    <span class="drop-zone-text">Drag &amp; drop your file here, or <label for="audioFile" class="link">browse</label></span>
+                    <input id="audioFile" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.webm" hidden />
+                </div>
+
+                <div id="fileInfo" class="file-info" style="display:none;">
+                    <span id="fileName" class="file-name"></span>
+                    <button id="removeFile" class="btn-icon" title="Remove file">&times;</button>
+                </div>
+
+                <button id="uploadBtn" class="btn btn-primary" disabled>
+                    <span id="uploadBtnText">Transcribe</span>
+                    <span id="uploadSpinner" class="spinner" style="display:none;"></span>
+                </button>
+            </div>
+
+            <!-- Transcription result -->
+            <div id="resultCard" class="card result-card" style="display:none;">
+                <div class="result-header">
+                    <h2>Transcription Result</h2>
+                    <button id="downloadBtn" class="btn btn-sm btn-outline">⬇ Download</button>
+                </div>
+                <pre id="resultText" class="result-text"></pre>
+            </div>
+        </main>
+
+        <!-- ── Right panel: Configuration ──────────────────────── -->
+        <aside class="config-panel">
+            <div class="card config-card">
+                <h2>Configuration</h2>
+
+                <div class="form-group">
+                    <label for="cfgModel">Model</label>
+                    <select id="cfgModel">
+                        <option value="voxtral-mini-latest" selected>voxtral-mini-latest</option>
+                        <option value="voxtral-large-latest">voxtral-large-latest</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="cfgSpeakers">Number of Speakers</label>
+                    <input id="cfgSpeakers" type="number" min="1" max="20" value="1" placeholder="e.g. 2" />
+                </div>
+
+                <div class="form-group">
+                    <label for="cfgPrompt">Custom Prompt</label>
+                    <textarea id="cfgPrompt" rows="4" placeholder="Optional instructions for the model…"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="cfgFormat">Output Format</label>
+                    <select id="cfgFormat">
+                        <option value="txt" selected>Plain Text (.txt)</option>
+                        <option value="srt">SubRip (.srt)</option>
+                        <option value="vtt">WebVTT (.vtt)</option>
+                        <option value="json">JSON (.json)</option>
+                    </select>
+                </div>
+            </div>
+        </aside>
+
+    </div><!-- /app-body -->
+</div>
+
+<script>
+    // ── Auth ────────────────────────────────────────────────────
+    (async () => {
+        const res = await fetch("/api/me", { credentials: "same-origin" });
+        if (!res.ok) { window.location.href = "/login"; return; }
+        const data = await res.json();
+        document.getElementById("userEmail").textContent = data.email || data.name || "User";
+    })();
+
+    document.getElementById("logoutBtn").addEventListener("click", async () => {
+        await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
+        window.location.href = "/login";
+    });
+
+    // ── Sidebar toggle ──────────────────────────────────────────
+    document.getElementById("sidebarToggle").addEventListener("click", () => {
+        document.getElementById("historySidebar").classList.toggle("collapsed");
+    });
+
+    // ── History ─────────────────────────────────────────────────
+    const historyList   = document.getElementById("historyList");
+    const historySearch = document.getElementById("historySearch");
+    let allTranscripts  = [];
+
+    async function loadHistory() {
+        try {
+            const res = await fetch("/api/transcripts", { credentials: "same-origin" });
+            if (!res.ok) return;
+            allTranscripts = await res.json();
+            renderHistory(allTranscripts);
+        } catch (_) {}
+    }
+
+    function renderHistory(items) {
+        historyList.innerHTML = "";
+        if (items.length === 0) {
+            historyList.innerHTML = '<li class="history-empty">No transcripts yet</li>';
+            return;
+        }
+        for (const t of items) {
+            const li = document.createElement("li");
+            li.className = "history-item";
+            li.dataset.id = t.id;
+
+            const date = new Date(t.created_at);
+            const dateStr = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+            const timeStr = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+            li.innerHTML = `
+                <div class="history-item-name">${escapeHtml(t.file_name)}</div>
+                <div class="history-item-meta">
+                    <span>${escapeHtml(t.model)}</span>
+                    <span>${dateStr}, ${timeStr}</span>
+                </div>
+            `;
+            li.addEventListener("click", () => loadTranscript(t.id));
+            historyList.appendChild(li);
+        }
+    }
+
+    historySearch.addEventListener("input", () => {
+        const q = historySearch.value.toLowerCase();
+        const filtered = allTranscripts.filter(t =>
+            t.file_name.toLowerCase().includes(q) ||
+            t.model.toLowerCase().includes(q)
+        );
+        renderHistory(filtered);
+    });
+
+    async function loadTranscript(id) {
+        // highlight active item
+        document.querySelectorAll(".history-item").forEach(el => el.classList.remove("active"));
+        const activeEl = document.querySelector(`.history-item[data-id="${id}"]`);
+        if (activeEl) activeEl.classList.add("active");
+
+        try {
+            const res = await fetch(`/api/transcripts/${id}`, { credentials: "same-origin" });
+            if (!res.ok) return;
+            const data = await res.json();
+
+            const resultCard = document.getElementById("resultCard");
+            const resultText = document.getElementById("resultText");
+            resultText.textContent = data.text;
+            resultCard.style.display = "block";
+            resultCard.dataset.text   = data.text;
+            resultCard.dataset.format = "txt";
+            resultCard.dataset.name   = data.file_name.replace(/\.[^.]+$/, "");
+        } catch (_) {}
+    }
+
+    function escapeHtml(str) {
+        const d = document.createElement("div");
+        d.textContent = str;
+        return d.innerHTML;
+    }
+
+    // New transcript button — reset the UI
+    document.getElementById("newTranscriptBtn").addEventListener("click", () => {
+        document.getElementById("resultCard").style.display = "none";
+        document.getElementById("resultText").textContent = "";
+        clearFile();
+        document.querySelectorAll(".history-item").forEach(el => el.classList.remove("active"));
+    });
+
+    // Load history on page load
+    loadHistory();
+
+    // ── File selection ──────────────────────────────────────────
+    const dropZone   = document.getElementById("dropZone");
+    const fileInput  = document.getElementById("audioFile");
+    const fileInfo   = document.getElementById("fileInfo");
+    const fileName   = document.getElementById("fileName");
+    const removeBtn  = document.getElementById("removeFile");
+    const uploadBtn  = document.getElementById("uploadBtn");
+
+    let selectedFile = null;
+
+    function setFile(file) {
+        selectedFile = file;
+        fileName.textContent = file.name;
+        fileInfo.style.display = "flex";
+        dropZone.style.display = "none";
+        uploadBtn.disabled = false;
+    }
+
+    function clearFile() {
+        selectedFile = null;
+        fileInput.value = "";
+        fileInfo.style.display = "none";
+        dropZone.style.display = "flex";
+        uploadBtn.disabled = true;
+    }
+
+    fileInput.addEventListener("change", () => {
+        if (fileInput.files.length) setFile(fileInput.files[0]);
+    });
+
+    removeBtn.addEventListener("click", clearFile);
+
+    // Drag & drop
+    dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+    dropZone.addEventListener("dragleave", () => { dropZone.classList.remove("drag-over"); });
+    dropZone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dropZone.classList.remove("drag-over");
+        if (e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
+    });
+
+    // ── Upload & transcribe ─────────────────────────────────────
+    uploadBtn.addEventListener("click", async () => {
+        if (!selectedFile) return;
+
+        const btnText = document.getElementById("uploadBtnText");
+        const spinner = document.getElementById("uploadSpinner");
+
+        uploadBtn.disabled = true;
+        btnText.textContent = "Transcribing…";
+        spinner.style.display = "inline-block";
+
+        const formData = new FormData();
+        formData.append("file", selectedFile);
+        formData.append("model", document.getElementById("cfgModel").value);
+        formData.append("num_speakers", document.getElementById("cfgSpeakers").value);
+        formData.append("prompt", document.getElementById("cfgPrompt").value);
+        formData.append("output_format", document.getElementById("cfgFormat").value);
+
+        try {
+            const res = await fetch("/api/transcribe", {
+                method: "POST",
+                credentials: "same-origin",
+                body: formData,
+            });
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                alert(data.error || "Transcription failed");
+                return;
+            }
+
+            // Show result
+            const resultCard = document.getElementById("resultCard");
+            const resultText = document.getElementById("resultText");
+            resultText.textContent = data.text;
+            resultCard.style.display = "block";
+
+            // Store for download
+            resultCard.dataset.text   = data.text;
+            resultCard.dataset.format = document.getElementById("cfgFormat").value;
+            resultCard.dataset.name   = selectedFile.name.replace(/\.[^.]+$/, "");
+
+            // Refresh history
+            loadHistory();
+
+        } catch (err) {
+            alert("Network error: " + err.message);
+        } finally {
+            btnText.textContent = "Transcribe";
+            spinner.style.display = "none";
+            uploadBtn.disabled = false;
+        }
+    });
+
+    // ── Download result ─────────────────────────────────────────
+    document.getElementById("downloadBtn").addEventListener("click", () => {
+        const card   = document.getElementById("resultCard");
+        const text   = card.dataset.text;
+        const fmt    = card.dataset.format || "txt";
+        const base   = card.dataset.name   || "transcript";
+
+        const mimeMap = { txt: "text/plain", srt: "text/plain", vtt: "text/vtt", json: "application/json" };
+
+        const blob = new Blob([text], { type: mimeMap[fmt] || "text/plain" });
+        const url  = URL.createObjectURL(blob);
+
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${base}.${fmt}`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    });
+</script>
+</body>
+</html>
+
