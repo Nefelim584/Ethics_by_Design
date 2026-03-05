@@ -485,6 +485,20 @@ a:hover { text-decoration: underline; }
     font-family: var(--font);
 }
 
+/* Blinking cursor while streaming */
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0; }
+}
+
+.result-text.streaming::after {
+    content: "▍";
+    display: inline-block;
+    color: var(--primary);
+    animation: blink 0.8s step-start infinite;
+    margin-left: 1px;
+}
+
 /* ── Outline button ──────────────────────────────────────────── */
 .btn-outline {
     background: var(--surface);
@@ -532,6 +546,39 @@ a:hover { text-decoration: underline; }
 .btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* ── Language toggle group ───────────────────────────────────── */
+.toggle-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.25rem;
+}
+
+.toggle-btn {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.8rem;
+    font-family: var(--font);
+    border: 1.5px solid var(--border);
+    border-radius: 2rem;
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}
+
+.toggle-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.toggle-btn.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    font-weight: 600;
 }
 
 /* ── Responsive ──────────────────────────────────────────────── */

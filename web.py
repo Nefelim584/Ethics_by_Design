@@ -1,9 +1,11 @@
+import json
+import logging
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from authlib.integrations.flask_client import OAuth
-from flask import Flask, jsonify, redirect, request, send_from_directory, session, url_for
+from flask import Flask, Response, jsonify, redirect, request, send_from_directory, session, stream_with_context, url_for
 from flask_cors import CORS
 from flask_login import (
     LoginManager,
@@ -15,9 +17,16 @@ from flask_login import (
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from db import Transcript, User, get_session, init_db
-from transcription import get_client, transcribe_file
+from transcription import diarize_stream, get_client, transcribe_file, transcribe_raw, translate_stream
 
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder=str(FRONTEND_DIR / "static"))
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-me")
@@ -179,7 +188,10 @@ def api_transcribe():
     model = request.form.get("model", "voxtral-mini-latest")
     language = request.form.get("language") or None
     num_speakers = request.form.get("num_speakers") or None
-    prompt = request.form.get("prompt") or None
+    target_language = request.form.get("target_language") or None
+    # "original" means no translation
+    if target_language == "original":
+        target_language = None
     output_format = request.form.get("output_format", "txt")
 
     if num_speakers is not None:
@@ -189,46 +201,101 @@ def api_transcribe():
             num_speakers = None
 
     tmp = NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix)
-    try:
-        file.save(tmp.name)
-        tmp.close()
-        audio_path = Path(tmp.name)
+    file.save(tmp.name)
+    tmp.close()
+    audio_path = Path(tmp.name)
 
-        client = get_client()
-        text = transcribe_file(
-            client=client,
-            audio_path=audio_path,
-            model=model,
-            language=language,
-            prompt=prompt,
-            output_format=output_format,
-        )
-    finally:
-        Path(tmp.name).unlink(missing_ok=True)
+    user_id = current_user.id
+    filename = file.filename
 
-    with get_session() as db:
-        transcript = Transcript(
-            user_id=current_user.id,
-            file_name=file.filename,
-            model=model,
-            language=language,
-            num_speakers=num_speakers,
-            prompt=prompt,
-            output_format=output_format,
-            text=text,
-        )
-        db.add(transcript)
-        db.commit()
-        db.refresh(transcript)
-        transcript_id = transcript.id
+    def generate():
+        full_text = ""
+        try:
+            client = get_client()
 
-    return jsonify(
-        {
-            "id": transcript_id,
-            "model": model,
-            "language": language,
-            "text": text,
-        }
+            if num_speakers is not None and num_speakers > 1:
+                # ── Phase 1: transcribe silently (no chunks sent yet) ──
+                yield f"data: {json.dumps({'status': 'Transcribing audio…'})}\n\n"
+
+                raw_text = transcribe_raw(
+                    client=client,
+                    audio_path=audio_path,
+                    model=model,
+                    language=language,
+                    num_speakers=num_speakers,
+                    output_format=output_format,
+                )
+
+                if target_language:
+                    # ── Phase 2a: translate via LLM ──
+                    yield f"data: {json.dumps({'status': f'Translating to {target_language.capitalize()}…'})}\n\n"
+                    for chunk in translate_stream(client, raw_text, target_language):
+                        full_text += chunk
+                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                else:
+                    # ── Phase 2b: diarize via LLM ──
+                    yield f"data: {json.dumps({'status': f'Formatting conversation for {num_speakers} speakers…'})}\n\n"
+                    for chunk in diarize_stream(client, raw_text, num_speakers):
+                        full_text += chunk
+                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+
+            else:
+                yield f"data: {json.dumps({'status': 'Transcribing…'})}\n\n"
+
+                if target_language:
+                    # Collect silently — do not stream raw text to the client
+                    raw_text = transcribe_raw(
+                        client=client,
+                        audio_path=audio_path,
+                        model=model,
+                        language=language,
+                        output_format=output_format,
+                    )
+                    yield f"data: {json.dumps({'status': f'Translating to {target_language.capitalize()}…'})}\n\n"
+                    for chunk in translate_stream(client, raw_text, target_language):
+                        full_text += chunk
+                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                else:
+                    for chunk in transcribe_file(
+                        client=client,
+                        audio_path=audio_path,
+                        model=model,
+                        language=language,
+                        output_format=output_format,
+                        stream=True,
+                    ):
+                        full_text += chunk
+                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+
+            with get_session() as db:
+                transcript = Transcript(
+                    user_id=user_id,
+                    file_name=filename,
+                    model=model,
+                    language=language,
+                    num_speakers=num_speakers,
+                    prompt=target_language,
+                    output_format=output_format,
+                    text=full_text,
+                )
+                db.add(transcript)
+                db.commit()
+                db.refresh(transcript)
+                transcript_id = transcript.id
+
+            yield f"data: {json.dumps({'done': True, 'id': transcript_id, 'model': model, 'language': language, 'text': full_text})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        finally:
+            audio_path.unlink(missing_ok=True)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -253,6 +320,7 @@ def api_transcripts():
                     "prompt": t.prompt,
                     "output_format": t.output_format,
                     "created_at": t.created_at.isoformat(),
+                    "text_preview": (t.text or "")[:200],
                 }
                 for t in rows
             ]

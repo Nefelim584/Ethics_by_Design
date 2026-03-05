@@ -76,6 +76,7 @@
                     <h2>Transcription Result</h2>
                     <button id="downloadBtn" class="btn btn-sm btn-outline">⬇ Download</button>
                 </div>
+                <p id="statusLabel" class="status-label" style="display:none;"></p>
                 <pre id="resultText" class="result-text"></pre>
             </div>
         </main>
@@ -99,8 +100,16 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="cfgPrompt">Custom Prompt</label>
-                    <textarea id="cfgPrompt" rows="4" placeholder="Optional instructions for the model…"></textarea>
+                    <label>Output Language</label>
+                    <div id="cfgLanguageToggle" class="toggle-group">
+                        <button type="button" class="toggle-btn active" data-value="original">Original</button>
+                        <button type="button" class="toggle-btn" data-value="english">English</button>
+                        <button type="button" class="toggle-btn" data-value="spanish">Spanish</button>
+                        <button type="button" class="toggle-btn" data-value="italian">Italian</button>
+                        <button type="button" class="toggle-btn" data-value="french">French</button>
+                        <button type="button" class="toggle-btn" data-value="russian">Russian</button>
+                    </div>
+                    <input type="hidden" id="cfgTargetLanguage" value="original" />
                 </div>
 
                 <div class="form-group">
@@ -135,6 +144,15 @@
     // ── Sidebar toggle ──────────────────────────────────────────
     document.getElementById("sidebarToggle").addEventListener("click", () => {
         document.getElementById("historySidebar").classList.toggle("collapsed");
+    });
+
+    // ── Language toggle ─────────────────────────────────────────
+    document.getElementById("cfgLanguageToggle").addEventListener("click", (e) => {
+        const btn = e.target.closest(".toggle-btn");
+        if (!btn) return;
+        document.querySelectorAll("#cfgLanguageToggle .toggle-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        document.getElementById("cfgTargetLanguage").value = btn.dataset.value;
     });
 
     // ── History ─────────────────────────────────────────────────
@@ -191,7 +209,8 @@
         const q = historySearch.value.toLowerCase();
         const filtered = allTranscripts.filter(t =>
             t.file_name.toLowerCase().includes(q) ||
-            t.model.toLowerCase().includes(q)
+            t.model.toLowerCase().includes(q) ||
+            (t.text_preview || "").toLowerCase().includes(q)
         );
         renderHistory(filtered);
     });
@@ -217,10 +236,14 @@
             resultCard.dataset.name   = data.file_name.replace(/\.[^.]+$/, "");
 
             // Restore config panel to match the loaded transcript
-            document.getElementById("cfgModel").value     = data.model || "voxtral-mini-latest";
-            document.getElementById("cfgSpeakers").value   = data.num_speakers || 1;
-            document.getElementById("cfgPrompt").value     = data.prompt || "";
-            document.getElementById("cfgFormat").value      = data.output_format || "txt";
+            document.getElementById("cfgModel").value    = data.model || "voxtral-mini-latest";
+            document.getElementById("cfgSpeakers").value  = data.num_speakers || 1;
+            document.getElementById("cfgFormat").value    = data.output_format || "txt";
+            const savedLang = data.prompt || "original";
+            document.getElementById("cfgTargetLanguage").value = savedLang;
+            document.querySelectorAll("#cfgLanguageToggle .toggle-btn").forEach(b => {
+                b.classList.toggle("active", b.dataset.value === savedLang);
+            });
         } catch (_) {}
     }
 
@@ -308,17 +331,43 @@
 
         const btnText = document.getElementById("uploadBtnText");
         const spinner = document.getElementById("uploadSpinner");
+        const resultCard = document.getElementById("resultCard");
+        const resultText = document.getElementById("resultText");
 
         uploadBtn.disabled = true;
         btnText.textContent = "Transcribing…";
         spinner.style.display = "inline-block";
 
+        // Show result card immediately with empty text + cursor
+        resultText.textContent = "";
+        resultText.classList.add("streaming");
+        resultCard.style.display = "block";
+
         const formData = new FormData();
         formData.append("file", selectedFile);
         formData.append("model", document.getElementById("cfgModel").value);
         formData.append("num_speakers", document.getElementById("cfgSpeakers").value);
-        formData.append("prompt", document.getElementById("cfgPrompt").value);
+        formData.append("target_language", document.getElementById("cfgTargetLanguage").value);
         formData.append("output_format", document.getElementById("cfgFormat").value);
+
+        // Typewriter queue
+        let displayQueue = "";
+        let isTyping = false;
+        let fullText = "";
+
+        function typeNextChar() {
+            if (displayQueue.length === 0) { isTyping = false; return; }
+            isTyping = true;
+            resultText.textContent += displayQueue[0];
+            displayQueue = displayQueue.slice(1);
+            resultText.scrollTop = resultText.scrollHeight;
+            setTimeout(typeNextChar, 16);
+        }
+
+        function enqueueText(text) {
+            displayQueue += text;
+            if (!isTyping) typeNextChar();
+        }
 
         try {
             const res = await fetch("/api/transcribe", {
@@ -327,34 +376,64 @@
                 body: formData,
             });
 
-            const data = await res.json();
-
             if (!res.ok) {
-                alert(data.error || "Transcription failed");
+                const err = await res.json();
+                alert(err.error || "Transcription failed");
+                resultCard.style.display = "none";
                 return;
             }
 
-            // Show result
-            const resultCard = document.getElementById("resultCard");
-            const resultText = document.getElementById("resultText");
-            resultText.textContent = data.text;
-            resultCard.style.display = "block";
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            let transcriptId = null;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop(); // keep incomplete line
+
+                for (const line of lines) {
+                    if (!line.startsWith("data: ")) continue;
+                    let payload;
+                    try { payload = JSON.parse(line.slice(6)); } catch { continue; }
+
+                    if (payload.error) { alert(payload.error); return; }
+                    if (payload.chunk) { enqueueText(payload.chunk); }
+                    if (payload.done) {
+                        transcriptId = payload.id;
+                        fullText = payload.text;
+                    }
+                }
+            }
+
+            // Wait for typewriter to finish draining the queue
+            await new Promise(resolve => {
+                const check = () => (displayQueue.length === 0 && !isTyping) ? resolve() : setTimeout(check, 50);
+                check();
+            });
+
+            resultText.classList.remove("streaming");
 
             // Store for download
-            resultCard.dataset.text   = data.text;
+            resultCard.dataset.text   = fullText;
             resultCard.dataset.format = document.getElementById("cfgFormat").value;
             resultCard.dataset.name   = selectedFile.name.replace(/\.[^.]+$/, "");
 
             // Refresh history and highlight the new entry
             await loadHistory();
-            if (data.id) {
+            if (transcriptId) {
                 document.querySelectorAll(".history-item").forEach(el => el.classList.remove("active"));
-                const newEl = document.querySelector(`.history-item[data-id="${data.id}"]`);
+                const newEl = document.querySelector(`.history-item[data-id="${transcriptId}"]`);
                 if (newEl) newEl.classList.add("active");
             }
 
         } catch (err) {
             alert("Network error: " + err.message);
+            resultText.classList.remove("streaming");
         } finally {
             btnText.textContent = "Transcribe";
             spinner.style.display = "none";
