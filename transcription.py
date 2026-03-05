@@ -1,7 +1,10 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from mistralai import Mistral
+
+load_dotenv()
 
 
 def get_client() -> Mistral:

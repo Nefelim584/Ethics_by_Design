@@ -167,13 +167,22 @@
             const timeStr = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 
             li.innerHTML = `
-                <div class="history-item-name">${escapeHtml(t.file_name)}</div>
-                <div class="history-item-meta">
-                    <span>${escapeHtml(t.model)}</span>
-                    <span>${dateStr}, ${timeStr}</span>
+                <div class="history-item-row">
+                    <div class="history-item-content">
+                        <div class="history-item-name">${escapeHtml(t.file_name)}</div>
+                        <div class="history-item-meta">
+                            <span>${escapeHtml(t.model)}</span>
+                            <span>${dateStr}, ${timeStr}</span>
+                        </div>
+                    </div>
+                    <button class="history-delete-btn btn-icon" data-id="${t.id}" title="Delete">&times;</button>
                 </div>
             `;
-            li.addEventListener("click", () => loadTranscript(t.id));
+            li.querySelector(".history-item-content").addEventListener("click", () => loadTranscript(t.id));
+            li.querySelector(".history-delete-btn").addEventListener("click", (e) => {
+                e.stopPropagation();
+                deleteTranscript(t.id);
+            });
             historyList.appendChild(li);
         }
     }
@@ -198,13 +207,40 @@
             if (!res.ok) return;
             const data = await res.json();
 
+            // Show result
             const resultCard = document.getElementById("resultCard");
             const resultText = document.getElementById("resultText");
             resultText.textContent = data.text;
             resultCard.style.display = "block";
             resultCard.dataset.text   = data.text;
-            resultCard.dataset.format = "txt";
+            resultCard.dataset.format = data.output_format || "txt";
             resultCard.dataset.name   = data.file_name.replace(/\.[^.]+$/, "");
+
+            // Restore config panel to match the loaded transcript
+            document.getElementById("cfgModel").value     = data.model || "voxtral-mini-latest";
+            document.getElementById("cfgSpeakers").value   = data.num_speakers || 1;
+            document.getElementById("cfgPrompt").value     = data.prompt || "";
+            document.getElementById("cfgFormat").value      = data.output_format || "txt";
+        } catch (_) {}
+    }
+
+    async function deleteTranscript(id) {
+        if (!confirm("Delete this transcript?")) return;
+        try {
+            const res = await fetch(`/api/transcripts/${id}`, {
+                method: "DELETE",
+                credentials: "same-origin",
+            });
+            if (!res.ok) return;
+
+            // If this was the currently-displayed transcript, hide the result
+            const activeEl = document.querySelector(`.history-item.active[data-id="${id}"]`);
+            if (activeEl) {
+                document.getElementById("resultCard").style.display = "none";
+                document.getElementById("resultText").textContent = "";
+            }
+
+            await loadHistory();
         } catch (_) {}
     }
 
@@ -309,8 +345,13 @@
             resultCard.dataset.format = document.getElementById("cfgFormat").value;
             resultCard.dataset.name   = selectedFile.name.replace(/\.[^.]+$/, "");
 
-            // Refresh history
-            loadHistory();
+            // Refresh history and highlight the new entry
+            await loadHistory();
+            if (data.id) {
+                document.querySelectorAll(".history-item").forEach(el => el.classList.remove("active"));
+                const newEl = document.querySelector(`.history-item[data-id="${data.id}"]`);
+                if (newEl) newEl.classList.add("active");
+            }
 
         } catch (err) {
             alert("Network error: " + err.message);

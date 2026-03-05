@@ -52,6 +52,9 @@ class Transcript(Base):
     file_name: Mapped[str] = mapped_column(String(512), nullable=False)
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     language: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    num_speakers: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    output_format: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, default="txt")
     text: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

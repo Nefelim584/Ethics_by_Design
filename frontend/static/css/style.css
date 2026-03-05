@@ -289,6 +289,25 @@ a:hover { text-decoration: underline; }
     border-left: 3px solid var(--primary);
 }
 
+.history-item-row {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+}
+
+.history-item-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.history-delete-btn {
+    opacity: 0;
+    flex-shrink: 0;
+    font-size: 1rem;
+    transition: opacity 0.15s;
+}
+.history-item:hover .history-delete-btn { opacity: 1; }
+
 .history-item-name {
     font-size: 0.8125rem;
     font-weight: 600;

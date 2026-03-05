@@ -188,8 +188,10 @@ def api_transcribe():
         except (ValueError, TypeError):
             num_speakers = None
 
-    with NamedTemporaryFile(delete=True, suffix=Path(file.filename).suffix) as tmp:
+    tmp = NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix)
+    try:
         file.save(tmp.name)
+        tmp.close()
         audio_path = Path(tmp.name)
 
         client = get_client()
@@ -198,10 +200,11 @@ def api_transcribe():
             audio_path=audio_path,
             model=model,
             language=language,
-            num_speakers=num_speakers,
             prompt=prompt,
             output_format=output_format,
         )
+    finally:
+        Path(tmp.name).unlink(missing_ok=True)
 
     with get_session() as db:
         transcript = Transcript(
@@ -209,13 +212,19 @@ def api_transcribe():
             file_name=file.filename,
             model=model,
             language=language,
+            num_speakers=num_speakers,
+            prompt=prompt,
+            output_format=output_format,
             text=text,
         )
         db.add(transcript)
         db.commit()
+        db.refresh(transcript)
+        transcript_id = transcript.id
 
     return jsonify(
         {
+            "id": transcript_id,
             "model": model,
             "language": language,
             "text": text,
@@ -240,6 +249,9 @@ def api_transcripts():
                     "file_name": t.file_name,
                     "model": t.model,
                     "language": t.language,
+                    "num_speakers": t.num_speakers,
+                    "prompt": t.prompt,
+                    "output_format": t.output_format,
                     "created_at": t.created_at.isoformat(),
                 }
                 for t in rows
@@ -264,10 +276,29 @@ def api_transcript_detail(transcript_id: int):
                 "file_name": t.file_name,
                 "model": t.model,
                 "language": t.language,
+                "num_speakers": t.num_speakers,
+                "prompt": t.prompt,
+                "output_format": t.output_format,
                 "created_at": t.created_at.isoformat(),
                 "text": t.text,
             }
         )
+
+
+@app.delete("/api/transcripts/<int:transcript_id>")
+@login_required
+def api_transcript_delete(transcript_id: int):
+    with get_session() as db:
+        t = (
+            db.query(Transcript)
+            .filter_by(user_id=current_user.id, id=transcript_id)
+            .one_or_none()
+        )
+        if t is None:
+            return jsonify({"error": "Not found"}), 404
+        db.delete(t)
+        db.commit()
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
