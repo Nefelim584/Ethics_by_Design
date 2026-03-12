@@ -22,12 +22,19 @@ from flask_login import (
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from db import Transcript, User, get_session, init_db
+from email_service import (
+    init_mail,
+    send_approval_email,
+    send_rejection_email,
+    send_registration_notification_to_admin,
+)
 from transcription import diarize_stream, get_client, transcribe_file, transcribe_raw, translate_stream
 
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "changeme")
+ADMIN_EMAIL    = os.getenv("MAIL_DEFAULT_SENDER", os.getenv("MAIL_USERNAME", ""))
 ADMIN_SESSION_KEY = "_admin_logged_in"
 
 logging.basicConfig(
@@ -49,6 +56,8 @@ CORS(
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = "page_login"
+
+init_mail(app)
 
 oauth = OAuth(app)
 oauth.register(
@@ -122,6 +131,8 @@ def auth_register():
         db.refresh(user)
 
     # Do NOT auto-login; account must be approved first
+    if ADMIN_EMAIL:
+        send_registration_notification_to_admin(ADMIN_EMAIL, user.email, user.name or user.email)
     return jsonify({"ok": True, "pending": True, "email": user.email}), 201
 
 
@@ -170,6 +181,8 @@ def auth_callback_google():
             db.add(user)
             db.commit()
             db.refresh(user)
+            if ADMIN_EMAIL:
+                send_registration_notification_to_admin(ADMIN_EMAIL, user.email, user.name or user.email)
 
     if not user.is_approved:
         return redirect(url_for("page_login") + "?error=pending_approval")
@@ -452,6 +465,9 @@ def api_admin_approve_user(user_id: int):
             return jsonify({"error": "User not found"}), 404
         user.is_approved = True
         db.commit()
+        user_email = user.email
+        user_name = user.name or user.email
+    send_approval_email(user_email, user_name)
     return jsonify({"ok": True})
 
 
@@ -462,8 +478,11 @@ def api_admin_reject_user(user_id: int):
         user = db.get(User, user_id)
         if user is None:
             return jsonify({"error": "User not found"}), 404
+        user_email = user.email
+        user_name = user.name or user.email
         db.delete(user)
         db.commit()
+    send_rejection_email(user_email, user_name)
     return jsonify({"ok": True})
 
 
