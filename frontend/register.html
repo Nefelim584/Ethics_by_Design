@@ -34,6 +34,13 @@
             <input id="password2" type="password" placeholder="Repeat password" required />
         </div>
 
+        <div class="form-group consent-group">
+            <label class="consent-label">
+                <input id="consent" type="checkbox" required />
+                <span>I agree to the processing of my personal data (email address and audio files) for the purpose of providing the transcription service.</span>
+            </label>
+        </div>
+
         <button class="btn btn-primary" type="submit">Create account</button>
     </form>
 
@@ -69,6 +76,9 @@
         }
         if (password !== password2) {
             return showError("Passwords do not match.");
+        }
+        if (!document.getElementById("consent").checked) {
+            return showError("You must agree to the data processing consent to register.");
         }
 
         const { ok, data } = await postJSON("/auth/register", { email, password });
