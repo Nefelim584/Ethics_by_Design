@@ -15,7 +15,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-_CHAT_MODEL = "mistral-large-latest"
+_CHAT_MODEL = "gemini-3-flash-preview"
 
 # Google models that use the Gemini API for transcription
 GOOGLE_MODELS = {
@@ -103,7 +103,8 @@ def transcribe_file(
     logger.info("STT response | model=%s | elapsed=%.2fs | chars=%d", model, time.perf_counter() - t0, len(raw_text))
 
     if num_speakers is not None and num_speakers > 1:
-        return "".join(_diarize_stream(client, raw_text, num_speakers))
+        g_client = get_google_client()
+        return "".join(_diarize_stream(g_client, raw_text, num_speakers))
 
     return raw_text
 
@@ -147,11 +148,11 @@ def transcribe_raw(
 
 
 def diarize_stream(
-    client: Mistral,
+    client: google_genai.Client,
     transcript: str,
     num_speakers: int,
 ) -> Generator[str, None, None]:
-    """Send raw transcript to LLM and stream the diarized script."""
+    """Send raw transcript to Gemini LLM and stream the diarized script."""
     yield from _diarize_stream(client, transcript, num_speakers)
 
 
@@ -182,7 +183,8 @@ def _transcribe_stream(
 
     # If multiple speakers requested, run LLM diarization and stream the result
     if num_speakers is not None and num_speakers > 1:
-        yield from _diarize_stream(client, raw_text, num_speakers)
+        g_client = get_google_client()
+        yield from _diarize_stream(g_client, raw_text, num_speakers)
         return
 
     # Single speaker — yield word-by-word
@@ -192,19 +194,20 @@ def _transcribe_stream(
 
 
 def _diarize_stream(
-    client: Mistral,
+    client: google_genai.Client,
     transcript: str,
     num_speakers: int,
 ) -> Generator[str, None, None]:
-    """Send the raw transcript to an LLM and stream back the diarized script."""
-    system_prompt = (
+    """Send the raw transcript to Gemini and stream back the diarized script word-by-word."""
+    prompt = (
         f"You are a transcript editor. "
         f"The following is a raw audio transcription of a conversation between "
         f"{num_speakers} people. "
         f"Reformat it as a clean script where each speaker's line starts with "
         f"'Speaker N:' (e.g. 'Speaker 1:', 'Speaker 2:', etc.). "
         f"Infer speaker turns from context. Do not add any commentary, "
-        f"introduction, or explanation — output only the reformatted script."
+        f"introduction, or explanation — output only the reformatted script.\n\n"
+        f"{transcript}"
     )
 
     logger.info(
@@ -213,26 +216,24 @@ def _diarize_stream(
     )
     t0 = time.perf_counter()
     chars_out = 0
-    with client.chat.stream(
+
+    response = client.models.generate_content(
         model=_CHAT_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": transcript},
-        ],
-    ) as stream:
-        for event in stream:
-            delta = event.data.choices[0].delta.content if event.data.choices else None
-            if delta:
-                chars_out += len(delta)
-                yield delta
+        contents=[prompt],
+    )
+    result_text = response.text or ""
+    chars_out = len(result_text)
     logger.info(
         "LLM response | model=%s | elapsed=%.2fs | chars_out=%d",
         _CHAT_MODEL, time.perf_counter() - t0, chars_out,
     )
+    words = result_text.split(" ")
+    for i, word in enumerate(words):
+        yield word if i == len(words) - 1 else word + " "
 
 
 def translate_stream(
-    client: Mistral,
+    client: google_genai.Client,
     transcript: str,
     target_language: str,
 ) -> Generator[str, None, None]:
@@ -241,18 +242,19 @@ def translate_stream(
 
 
 def _translate_stream(
-    client: Mistral,
+    client: google_genai.Client,
     transcript: str,
     target_language: str,
 ) -> Generator[str, None, None]:
-    """Use Mistral with structured output to translate a transcript, then stream the text."""
+    """Use Gemini to translate a transcript, then stream the text word-by-word."""
     lang_label = SUPPORTED_LANGUAGES.get(target_language.lower(), target_language.capitalize())
 
-    system_prompt = (
+    prompt = (
         f"You are a professional translator. "
         f"Translate the following transcript into {lang_label}. "
         f"Preserve the original formatting and speaker labels if present. "
-        f"Do not add commentary or explanation — output only the translation."
+        f"Do not add commentary or explanation — output only the translation.\n\n"
+        f"{transcript}"
     )
 
     logger.info(
@@ -261,23 +263,19 @@ def _translate_stream(
     )
     t0 = time.perf_counter()
 
-    response = client.chat.parse(
+    response = client.models.generate_content(
         model=_CHAT_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": transcript},
-        ],
-        response_format=TranslationOutput,
+        contents=[prompt],
     )
 
-    result: TranslationOutput = response.choices[0].message.parsed
+    translated_text = response.text or ""
     logger.info(
         "LLM translate response | model=%s | target=%s | elapsed=%.2fs | chars_out=%d",
-        _CHAT_MODEL, lang_label, time.perf_counter() - t0, len(result.translated_text),
+        _CHAT_MODEL, lang_label, time.perf_counter() - t0, len(translated_text),
     )
 
     # Stream the translated text word-by-word
-    words = result.translated_text.split(" ")
+    words = translated_text.split(" ")
     for i, word in enumerate(words):
         yield word if i == len(words) - 1 else word + " "
 

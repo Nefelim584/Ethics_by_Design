@@ -266,7 +266,6 @@ def api_transcribe():
             if is_google_model:
                 # ── Google Gemini transcription path ──────────────────
                 g_client = get_google_client()
-                mistral_client = get_client()  # still needed for LLM post-processing
 
                 yield f"data: {json.dumps({'status': 'Transcribing audio…'})}\n\n"
 
@@ -280,12 +279,12 @@ def api_transcribe():
 
                 if target_language:
                     yield f"data: {json.dumps({'status': f'Translating to {target_language.capitalize()}…'})}\n\n"
-                    for chunk in translate_stream(mistral_client, raw_text, target_language):
+                    for chunk in translate_stream(g_client, raw_text, target_language):
                         full_text += chunk
                         yield f"data: {json.dumps({'chunk': chunk})}\n\n"
                 elif num_speakers is not None and num_speakers > 1:
                     yield f"data: {json.dumps({'status': f'Formatting conversation for {num_speakers} speakers…'})}\n\n"
-                    for chunk in diarize_stream(mistral_client, raw_text, num_speakers):
+                    for chunk in diarize_stream(g_client, raw_text, num_speakers):
                         full_text += chunk
                         yield f"data: {json.dumps({'chunk': chunk})}\n\n"
                 else:
@@ -298,7 +297,7 @@ def api_transcribe():
             elif is_openai_model:
                 # ── OpenAI Whisper / GPT-4o transcription path ────────
                 oa_client = get_openai_client()
-                mistral_client = get_client()  # still needed for LLM post-processing
+                g_client = get_google_client()  # for LLM post-processing
 
                 yield f"data: {json.dumps({'status': 'Transcribing audio…'})}\n\n"
 
@@ -311,12 +310,12 @@ def api_transcribe():
 
                 if target_language:
                     yield f"data: {json.dumps({'status': f'Translating to {target_language.capitalize()}…'})}\n\n"
-                    for chunk in translate_stream(mistral_client, raw_text, target_language):
+                    for chunk in translate_stream(g_client, raw_text, target_language):
                         full_text += chunk
                         yield f"data: {json.dumps({'chunk': chunk})}\n\n"
                 elif num_speakers is not None and num_speakers > 1:
                     yield f"data: {json.dumps({'status': f'Formatting conversation for {num_speakers} speakers…'})}\n\n"
-                    for chunk in diarize_stream(mistral_client, raw_text, num_speakers):
+                    for chunk in diarize_stream(g_client, raw_text, num_speakers):
                         full_text += chunk
                         yield f"data: {json.dumps({'chunk': chunk})}\n\n"
                 else:
@@ -329,6 +328,7 @@ def api_transcribe():
             else:
                 # ── Mistral / Voxtral transcription path ──────────────
                 client = get_client()
+                g_client = get_google_client()  # for LLM post-processing
 
                 if num_speakers is not None and num_speakers > 1:
                     # ── Phase 1: transcribe silently (no chunks sent yet) ──
@@ -346,13 +346,13 @@ def api_transcribe():
                     if target_language:
                         # ── Phase 2a: translate via LLM ──
                         yield f"data: {json.dumps({'status': f'Translating to {target_language.capitalize()}…'})}\n\n"
-                        for chunk in translate_stream(client, raw_text, target_language):
+                        for chunk in translate_stream(g_client, raw_text, target_language):
                             full_text += chunk
                             yield f"data: {json.dumps({'chunk': chunk})}\n\n"
                     else:
                         # ── Phase 2b: diarize via LLM ──
                         yield f"data: {json.dumps({'status': f'Formatting conversation for {num_speakers} speakers…'})}\n\n"
-                        for chunk in diarize_stream(client, raw_text, num_speakers):
+                        for chunk in diarize_stream(g_client, raw_text, num_speakers):
                             full_text += chunk
                             yield f"data: {json.dumps({'chunk': chunk})}\n\n"
 
@@ -369,7 +369,7 @@ def api_transcribe():
                             output_format=output_format,
                         )
                         yield f"data: {json.dumps({'status': f'Translating to {target_language.capitalize()}…'})}\n\n"
-                        for chunk in translate_stream(client, raw_text, target_language):
+                        for chunk in translate_stream(g_client, raw_text, target_language):
                             full_text += chunk
                             yield f"data: {json.dumps({'chunk': chunk})}\n\n"
                     else:
