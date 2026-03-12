@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Dashboard — Ethics by Design</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/css/style.css" />
+    <link rel="stylesheet" href="/static/css/admin.css" />
+</head>
+<body class="admin-body">
+
+<div class="admin-layout">
+
+    <!-- Top bar -->
+    <header class="admin-topbar">
+        <span class="admin-brand">⚙️ Admin Dashboard</span>
+        <button id="logoutBtn" class="btn btn-sm btn-outline">Log out</button>
+    </header>
+
+    <!-- Main content -->
+    <main class="admin-main">
+
+        <!-- Stats row -->
+        <div class="admin-stats">
+            <div class="stat-card">
+                <div class="stat-value" id="statTotal">—</div>
+                <div class="stat-label">Total users</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statPending">—</div>
+                <div class="stat-label">Pending approval</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statApproved">—</div>
+                <div class="stat-label">Approved</div>
+            </div>
+        </div>
+
+        <!-- Pending approvals -->
+        <section class="admin-section">
+            <div class="section-header">
+                <h2>Pending Approvals</h2>
+                <button class="btn btn-sm btn-outline" id="refreshBtn">↻ Refresh</button>
+            </div>
+            <div id="pendingList" class="user-table-wrapper">
+                <p class="empty-state">Loading…</p>
+            </div>
+        </section>
+
+        <!-- All users -->
+        <section class="admin-section">
+            <h2>All Users</h2>
+            <div id="allUsersList" class="user-table-wrapper">
+                <p class="empty-state">Loading…</p>
+            </div>
+        </section>
+
+    </main>
+</div>
+
+<!-- Toast notification -->
+<div id="toast" class="admin-toast"></div>
+
+<script>
+    /* ── helpers ────────────────────────────────────────────── */
+    const toast = document.getElementById("toast");
+    function showToast(msg, type = "success") {
+        toast.textContent = msg;
+        toast.className = "admin-toast visible " + type;
+        clearTimeout(toast._t);
+        toast._t = setTimeout(() => toast.classList.remove("visible"), 3000);
+    }
+
+    async function apiFetch(url, method = "GET", body = null) {
+        const opts = { method, credentials: "include", headers: {} };
+        if (body) {
+            opts.headers["Content-Type"] = "application/json";
+            opts.body = JSON.stringify(body);
+        }
+        const res = await fetch(url, opts);
+        const data = await res.json().catch(() => ({}));
+        return { ok: res.ok, data };
+    }
+
+    /* ── data ───────────────────────────────────────────────── */
+    let allUsers = [];
+
+    async function loadUsers() {
+        const { ok, data } = await apiFetch("/api/admin/users");
+        if (!ok) {
+            if (data.error === "Unauthorized") window.location.href = "/admin/login";
+            return;
+        }
+        allUsers = data;
+        renderStats();
+        renderPending();
+        renderAll();
+    }
+
+    function renderStats() {
+        document.getElementById("statTotal").textContent = allUsers.length;
+        document.getElementById("statPending").textContent = allUsers.filter(u => !u.is_approved).length;
+        document.getElementById("statApproved").textContent = allUsers.filter(u => u.is_approved).length;
+    }
+
+    function fmtDate(iso) {
+        return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    }
+
+    function buildTable(users, showActions) {
+        if (users.length === 0) {
+            return `<p class="empty-state">${showActions ? "No pending accounts 🎉" : "No users found."}</p>`;
+        }
+        const rows = users.map(u => `
+            <tr>
+                <td>${escHtml(u.name || "—")}</td>
+                <td>${escHtml(u.email)}</td>
+                <td>${fmtDate(u.created_at)}</td>
+                <td>
+                    <span class="badge ${u.is_approved ? 'badge-approved' : 'badge-pending'}">
+                        ${u.is_approved ? "Approved" : "Pending"}
+                    </span>
+                </td>
+                ${showActions ? `
+                <td class="action-cell">
+                    ${!u.is_approved ? `<button class="btn btn-sm btn-approve" data-id="${u.id}">✓ Approve</button>` : ""}
+                    <button class="btn btn-sm btn-danger" data-id="${u.id}" data-action="reject">✕ Delete</button>
+                </td>` : ""}
+            </tr>`).join("");
+
+        return `
+            <table class="user-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Registered</th>
+                        <th>Status</th>
+                        ${showActions ? "<th>Actions</th>" : ""}
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+    }
+
+    function escHtml(str) {
+        return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    }
+
+    function renderPending() {
+        const pending = allUsers.filter(u => !u.is_approved);
+        document.getElementById("pendingList").innerHTML = buildTable(pending, true);
+        attachActionListeners("pendingList");
+    }
+
+    function renderAll() {
+        document.getElementById("allUsersList").innerHTML = buildTable(allUsers, true);
+        attachActionListeners("allUsersList");
+    }
+
+    function attachActionListeners(containerId) {
+        const container = document.getElementById(containerId);
+
+        container.querySelectorAll(".btn-approve").forEach(btn => {
+            btn.addEventListener("click", async () => {
+                const id = +btn.dataset.id;
+                const { ok } = await apiFetch(`/api/admin/users/${id}/approve`, "POST");
+                if (ok) { showToast("User approved ✓"); loadUsers(); }
+                else showToast("Failed to approve user", "error");
+            });
+        });
+
+        container.querySelectorAll(".btn-danger[data-action='reject']").forEach(btn => {
+            btn.addEventListener("click", async () => {
+                const id = +btn.dataset.id;
+                if (!confirm("Delete this user and all their data? This cannot be undone.")) return;
+                const { ok } = await apiFetch(`/api/admin/users/${id}/reject`, "POST");
+                if (ok) { showToast("User deleted"); loadUsers(); }
+                else showToast("Failed to delete user", "error");
+            });
+        });
+    }
+
+    /* ── init ───────────────────────────────────────────────── */
+    document.getElementById("refreshBtn").addEventListener("click", loadUsers);
+
+    document.getElementById("logoutBtn").addEventListener("click", async () => {
+        await apiFetch("/admin/logout", "POST");
+        window.location.href = "/admin/login";
+    });
+
+    loadUsers();
+</script>
+</body>
+</html>
+

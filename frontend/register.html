@@ -16,6 +16,7 @@
     <p class="subtitle">Start using Ethics by Design</p>
 
     <div id="alert" class="alert alert-error"></div>
+    <div id="success" class="alert alert-success"></div>
 
     <form id="registerForm" novalidate>
         <div class="form-group">
@@ -56,9 +57,17 @@
 
 <script src="/static/js/auth.js"></script>
 <script>
+    const successEl = document.getElementById("success");
+
+    function showSuccess(msg) {
+        successEl.textContent = msg;
+        successEl.classList.add("visible");
+    }
+
     document.getElementById("registerForm").addEventListener("submit", async (e) => {
         e.preventDefault();
         hideError();
+        successEl.classList.remove("visible");
 
         const email     = document.getElementById("email").value.trim();
         const password  = document.getElementById("password").value;
@@ -77,7 +86,9 @@
         const { ok, data } = await postJSON("/auth/register", { email, password });
 
         if (ok) {
-            window.location.href = "/";
+            // Account created but pending admin approval
+            document.getElementById("registerForm").style.display = "none";
+            showSuccess("✅ Account created! Your account is pending admin approval. You'll be able to sign in once it's approved.");
         } else {
             showError(data.error || "Registration failed. Please try again.");
         }

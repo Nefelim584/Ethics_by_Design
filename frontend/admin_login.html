@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Login — Ethics by Design</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+
+<div class="auth-card">
+    <h1>Admin Panel</h1>
+    <p class="subtitle">Sign in with your admin credentials</p>
+
+    <div id="alert" class="alert alert-error"></div>
+
+    <form id="adminLoginForm" novalidate>
+        <div class="form-group">
+            <label for="username">Username</label>
+            <input id="username" type="text" placeholder="admin" required autocomplete="username" />
+        </div>
+
+        <div class="form-group">
+            <label for="password">Password</label>
+            <input id="password" type="password" placeholder="••••••••" required autocomplete="current-password" />
+        </div>
+
+        <button class="btn btn-primary" type="submit">Sign in</button>
+    </form>
+</div>
+
+<script>
+    const alertEl = document.getElementById("alert");
+
+    function showError(msg) {
+        alertEl.textContent = msg;
+        alertEl.classList.add("visible");
+    }
+
+    function hideError() {
+        alertEl.classList.remove("visible");
+    }
+
+    document.getElementById("adminLoginForm").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        hideError();
+
+        const username = document.getElementById("username").value.trim();
+        const password = document.getElementById("password").value;
+
+        if (!username || !password) {
+            return showError("Please fill in both fields.");
+        }
+
+        const res = await fetch("/admin/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+            credentials: "include",
+        });
+
+        const data = await res.json();
+        if (res.ok && data.ok) {
+            window.location.href = "/admin";
+        } else {
+            showError(data.error || "Login failed.");
+        }
+    });
+</script>
+</body>
+</html>
+
