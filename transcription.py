@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from google import genai as google_genai
 from google.genai import types as google_types
 from mistralai import Mistral
+from openai import OpenAI
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -17,7 +18,15 @@ logger = logging.getLogger(__name__)
 _CHAT_MODEL = "mistral-large-latest"
 
 # Google models that use the Gemini API for transcription
-GOOGLE_MODELS = {"gemini-2.0-flash", "gemini-2.5-flash-preview-04-17"}
+GOOGLE_MODELS = {
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash-preview-04-17",
+    "gemini-2.5-pro-preview-03-25",
+}
+
+# OpenAI models that use the Whisper API for transcription
+OPENAI_MODELS = {"whisper-1"}
 
 SUPPORTED_LANGUAGES = {
     "english": "English",
@@ -46,6 +55,13 @@ def get_google_client() -> google_genai.Client:
     if not api_key:
         raise RuntimeError("Missing GOOGLE_API_KEY environment variable.")
     return google_genai.Client(api_key=api_key)
+
+
+def get_openai_client() -> OpenAI:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Missing OPENAI_API_KEY environment variable.")
+    return OpenAI(api_key=api_key)
 
 
 def transcribe_file(
@@ -287,17 +303,27 @@ def google_transcribe_raw(
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
     # Build the transcription prompt
-    lang_hint = f" The audio is in {SUPPORTED_LANGUAGES.get(language.lower(), language.capitalize())}." if language else ""
-    speaker_hint = (
-        f" There are {num_speakers} speakers in the conversation."
-        if num_speakers and num_speakers > 1
-        else ""
+    lang_hint = (
+        f" The audio is in {SUPPORTED_LANGUAGES.get(language.lower(), language.capitalize())}."
+        if language else ""
     )
-    prompt = (
-        f"Please transcribe the audio exactly as spoken, word for word."
-        f"{lang_hint}{speaker_hint}"
-        f" Output only the raw transcript text with no commentary."
-    )
+
+    if num_speakers and num_speakers > 1:
+        prompt = (
+            f"Transcribe the following audio. There are exactly {num_speakers} speakers."
+            f"{lang_hint}"
+            f" Format the output as a dialogue script where every speaker turn starts on a new line"
+            f" with the label 'Speaker N:' (e.g. 'Speaker 1:', 'Speaker 2:', etc.)."
+            f" Infer speaker changes from context, tone, and content."
+            f" Do NOT merge all speech into a single block."
+            f" Output only the formatted script — no commentary, no introduction."
+        )
+    else:
+        prompt = (
+            f"Transcribe the following audio exactly as spoken, word for word."
+            f"{lang_hint}"
+            f" Output only the raw transcript text with no commentary."
+        )
 
     logger.info(
         "Google STT request | model=%s | file=%s | language=%s | num_speakers=%s",
@@ -332,6 +358,54 @@ def google_transcribe_raw(
     raw_text = response.text or ""
     logger.info(
         "Google STT response | model=%s | elapsed=%.2fs | chars=%d",
+        model, time.perf_counter() - t0, len(raw_text),
+    )
+    return raw_text
+
+
+# ── OpenAI Whisper / GPT-4o transcription ───────────────────────
+
+def openai_transcribe_raw(
+    *,
+    openai_client: OpenAI,
+    audio_path: Path,
+    model: str = "whisper-1",
+    language: str | None = None,
+) -> str:
+    """
+    Transcribe an audio file using the OpenAI Audio Transcriptions API.
+    Supports whisper-1, gpt-4o-transcribe, and gpt-4o-mini-transcribe.
+    Returns the raw transcript text (no LLM post-processing).
+    """
+    audio_path = audio_path.expanduser().resolve()
+    if not audio_path.exists() or not audio_path.is_file():
+        raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
+    # OpenAI accepts BCP-47 language codes (e.g. "en", "fr").
+    # Map from our internal language names to ISO 639-1 codes.
+    lang_code_map = {
+        "english": "en",
+        "spanish": "es",
+        "italian": "it",
+        "french": "fr",
+        "russian": "ru",
+    }
+    lang_code = lang_code_map.get((language or "").lower()) if language else None
+
+    logger.info(
+        "OpenAI STT request | model=%s | file=%s | language=%s",
+        model, audio_path.name, lang_code,
+    )
+    t0 = time.perf_counter()
+
+    with audio_path.open("rb") as f:
+        kwargs: dict = {"model": model, "file": f, "response_format": "text"}
+        if lang_code:
+            kwargs["language"] = lang_code
+        raw_text: str = openai_client.audio.transcriptions.create(**kwargs)
+
+    logger.info(
+        "OpenAI STT response | model=%s | elapsed=%.2fs | chars=%d",
         model, time.perf_counter() - t0, len(raw_text),
     )
     return raw_text

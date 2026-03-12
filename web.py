@@ -30,10 +30,13 @@ from email_service import (
 )
 from transcription import (
     GOOGLE_MODELS,
+    OPENAI_MODELS,
     diarize_stream,
     get_client,
     get_google_client,
+    get_openai_client,
     google_transcribe_raw,
+    openai_transcribe_raw,
     transcribe_file,
     transcribe_raw,
     translate_stream,
@@ -258,6 +261,7 @@ def api_transcribe():
         full_text = ""
         try:
             is_google_model = model in GOOGLE_MODELS
+            is_openai_model = model in OPENAI_MODELS
 
             if is_google_model:
                 # ── Google Gemini transcription path ──────────────────
@@ -285,7 +289,37 @@ def api_transcribe():
                         full_text += chunk
                         yield f"data: {json.dumps({'chunk': chunk})}\n\n"
                 else:
-                    # Stream the raw text word-by-word
+                    words = raw_text.split(" ")
+                    for i, word in enumerate(words):
+                        chunk = word if i == len(words) - 1 else word + " "
+                        full_text += chunk
+                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+
+            elif is_openai_model:
+                # ── OpenAI Whisper / GPT-4o transcription path ────────
+                oa_client = get_openai_client()
+                mistral_client = get_client()  # still needed for LLM post-processing
+
+                yield f"data: {json.dumps({'status': 'Transcribing audio…'})}\n\n"
+
+                raw_text = openai_transcribe_raw(
+                    openai_client=oa_client,
+                    audio_path=audio_path,
+                    model=model,
+                    language=language,
+                )
+
+                if target_language:
+                    yield f"data: {json.dumps({'status': f'Translating to {target_language.capitalize()}…'})}\n\n"
+                    for chunk in translate_stream(mistral_client, raw_text, target_language):
+                        full_text += chunk
+                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                elif num_speakers is not None and num_speakers > 1:
+                    yield f"data: {json.dumps({'status': f'Formatting conversation for {num_speakers} speakers…'})}\n\n"
+                    for chunk in diarize_stream(mistral_client, raw_text, num_speakers):
+                        full_text += chunk
+                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                else:
                     words = raw_text.split(" ")
                     for i, word in enumerate(words):
                         chunk = word if i == len(words) - 1 else word + " "
