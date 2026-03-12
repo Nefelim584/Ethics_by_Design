@@ -4,6 +4,7 @@ from typing import Optional
 
 from flask_login import UserMixin
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -36,6 +37,7 @@ class User(Base, UserMixin):
     password_hash: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    is_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     transcripts: Mapped[list["Transcript"]] = relationship(
         "Transcript",

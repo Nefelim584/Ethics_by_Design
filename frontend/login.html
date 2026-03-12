@@ -70,6 +70,14 @@
             showError(data.error || "Login failed. Please try again.");
         }
     });
+
+    // Show error messages passed via URL query params (e.g. from Google OAuth redirect)
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("error") === "pending_approval") {
+        showError("Your account is pending admin approval. Please check back later.");
+    } else if (params.get("error") === "auth_failed") {
+        showError("Authentication failed. Please try again.");
+    }
 </script>
 </body>
 </html>

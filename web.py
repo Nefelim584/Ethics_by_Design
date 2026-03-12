@@ -1,8 +1,13 @@
 import json
 import logging
 import os
+from functools import wraps
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from authlib.integrations.flask_client import OAuth
 from flask import Flask, Response, jsonify, redirect, request, send_from_directory, session, stream_with_context, url_for
@@ -20,6 +25,10 @@ from db import Transcript, User, get_session, init_db
 from transcription import diarize_stream, get_client, transcribe_file, transcribe_raw, translate_stream
 
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
+
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "changeme")
+ADMIN_SESSION_KEY = "_admin_logged_in"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,6 +64,16 @@ oauth.register(
 def load_user(user_id: str):
     with get_session() as db:
         return db.get(User, int(user_id))
+
+
+def admin_required(f):
+    """Decorator: only allow requests from an authenticated admin session."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get(ADMIN_SESSION_KEY):
+            return redirect(url_for("admin_login_page"))
+        return f(*args, **kwargs)
+    return decorated
 
 
 # ── HTML page routes ────────────────────────────────────────────
@@ -96,14 +115,14 @@ def auth_register():
             email=email,
             password_hash=generate_password_hash(password),
             name=email.split("@")[0],
+            is_approved=False,
         )
         db.add(user)
         db.commit()
         db.refresh(user)
 
-    login_user(user)
-    session.permanent = True
-    return jsonify({"ok": True, "email": user.email}), 201
+    # Do NOT auto-login; account must be approved first
+    return jsonify({"ok": True, "pending": True, "email": user.email}), 201
 
 
 @app.post("/auth/login")
@@ -119,6 +138,8 @@ def auth_login_email():
         user = db.query(User).filter_by(email=email).one_or_none()
         if user is None or not user.password_hash or not check_password_hash(user.password_hash, password):
             return jsonify({"error": "Invalid email or password"}), 401
+        if not user.is_approved:
+            return jsonify({"error": "Your account is pending admin approval."}), 403
 
     login_user(user)
     session.permanent = True
@@ -145,10 +166,13 @@ def auth_callback_google():
     with get_session() as db:
         user = db.query(User).filter_by(email=email).one_or_none()
         if user is None:
-            user = User(email=email, name=name)
+            user = User(email=email, name=name, is_approved=False)
             db.add(user)
             db.commit()
             db.refresh(user)
+
+    if not user.is_approved:
+        return redirect(url_for("page_login") + "?error=pending_approval")
 
     login_user(user)
     session.permanent = True
@@ -365,6 +389,80 @@ def api_transcript_delete(transcript_id: int):
         if t is None:
             return jsonify({"error": "Not found"}), 404
         db.delete(t)
+        db.commit()
+    return jsonify({"ok": True})
+
+
+# ── Admin ────────────────────────────────────────────────────────
+@app.get("/admin")
+@admin_required
+def admin_dashboard():
+    return send_from_directory(FRONTEND_DIR, "admin.html")
+
+
+@app.get("/admin/login")
+def admin_login_page():
+    return send_from_directory(FRONTEND_DIR, "admin_login.html")
+
+
+@app.post("/admin/login")
+def admin_login():
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+
+    if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+        session[ADMIN_SESSION_KEY] = True
+        session.permanent = True
+        return jsonify({"ok": True})
+    return jsonify({"error": "Invalid credentials"}), 401
+
+
+@app.post("/admin/logout")
+def admin_logout():
+    session.pop(ADMIN_SESSION_KEY, None)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/admin/users")
+@admin_required
+def api_admin_users():
+    with get_session() as db:
+        users = db.query(User).order_by(User.created_at.desc()).all()
+        return jsonify(
+            [
+                {
+                    "id": u.id,
+                    "email": u.email,
+                    "name": u.name,
+                    "is_approved": u.is_approved,
+                    "created_at": u.created_at.isoformat(),
+                }
+                for u in users
+            ]
+        )
+
+
+@app.post("/api/admin/users/<int:user_id>/approve")
+@admin_required
+def api_admin_approve_user(user_id: int):
+    with get_session() as db:
+        user = db.get(User, user_id)
+        if user is None:
+            return jsonify({"error": "User not found"}), 404
+        user.is_approved = True
+        db.commit()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/admin/users/<int:user_id>/reject")
+@admin_required
+def api_admin_reject_user(user_id: int):
+    with get_session() as db:
+        user = db.get(User, user_id)
+        if user is None:
+            return jsonify({"error": "User not found"}), 404
+        db.delete(user)
         db.commit()
     return jsonify({"ok": True})
 
