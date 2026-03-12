@@ -89,8 +89,14 @@
                 <div class="form-group">
                     <label for="cfgModel">Model</label>
                     <select id="cfgModel">
-                        <option value="voxtral-mini-latest" selected>voxtral-mini-latest</option>
-                        <option value="voxtral-large-latest">voxtral-large-latest</option>
+                        <optgroup label="Mistral (Voxtral)">
+                            <option value="voxtral-mini-latest" selected>voxtral-mini-latest</option>
+                            <option value="voxtral-large-latest">voxtral-large-latest</option>
+                        </optgroup>
+                        <optgroup label="Google (Gemini)">
+                            <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                            <option value="gemini-2.5-flash-preview-04-17">gemini-2.5-flash</option>
+                        </optgroup>
                     </select>
                 </div>
 

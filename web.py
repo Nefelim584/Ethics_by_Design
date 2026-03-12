@@ -28,7 +28,16 @@ from email_service import (
     send_rejection_email,
     send_registration_notification_to_admin,
 )
-from transcription import diarize_stream, get_client, transcribe_file, transcribe_raw, translate_stream
+from transcription import (
+    GOOGLE_MODELS,
+    diarize_stream,
+    get_client,
+    get_google_client,
+    google_transcribe_raw,
+    transcribe_file,
+    transcribe_raw,
+    translate_stream,
+)
 
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 
@@ -248,61 +257,98 @@ def api_transcribe():
     def generate():
         full_text = ""
         try:
-            client = get_client()
+            is_google_model = model in GOOGLE_MODELS
 
-            if num_speakers is not None and num_speakers > 1:
-                # ── Phase 1: transcribe silently (no chunks sent yet) ──
+            if is_google_model:
+                # ── Google Gemini transcription path ──────────────────
+                g_client = get_google_client()
+                mistral_client = get_client()  # still needed for LLM post-processing
+
                 yield f"data: {json.dumps({'status': 'Transcribing audio…'})}\n\n"
 
-                raw_text = transcribe_raw(
-                    client=client,
+                raw_text = google_transcribe_raw(
+                    google_client=g_client,
                     audio_path=audio_path,
                     model=model,
                     language=language,
                     num_speakers=num_speakers,
-                    output_format=output_format,
                 )
 
                 if target_language:
-                    # ── Phase 2a: translate via LLM ──
                     yield f"data: {json.dumps({'status': f'Translating to {target_language.capitalize()}…'})}\n\n"
-                    for chunk in translate_stream(client, raw_text, target_language):
+                    for chunk in translate_stream(mistral_client, raw_text, target_language):
+                        full_text += chunk
+                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                elif num_speakers is not None and num_speakers > 1:
+                    yield f"data: {json.dumps({'status': f'Formatting conversation for {num_speakers} speakers…'})}\n\n"
+                    for chunk in diarize_stream(mistral_client, raw_text, num_speakers):
                         full_text += chunk
                         yield f"data: {json.dumps({'chunk': chunk})}\n\n"
                 else:
-                    # ── Phase 2b: diarize via LLM ──
-                    yield f"data: {json.dumps({'status': f'Formatting conversation for {num_speakers} speakers…'})}\n\n"
-                    for chunk in diarize_stream(client, raw_text, num_speakers):
+                    # Stream the raw text word-by-word
+                    words = raw_text.split(" ")
+                    for i, word in enumerate(words):
+                        chunk = word if i == len(words) - 1 else word + " "
                         full_text += chunk
                         yield f"data: {json.dumps({'chunk': chunk})}\n\n"
 
             else:
-                yield f"data: {json.dumps({'status': 'Transcribing…'})}\n\n"
+                # ── Mistral / Voxtral transcription path ──────────────
+                client = get_client()
 
-                if target_language:
-                    # Collect silently — do not stream raw text to the client
+                if num_speakers is not None and num_speakers > 1:
+                    # ── Phase 1: transcribe silently (no chunks sent yet) ──
+                    yield f"data: {json.dumps({'status': 'Transcribing audio…'})}\n\n"
+
                     raw_text = transcribe_raw(
                         client=client,
                         audio_path=audio_path,
                         model=model,
                         language=language,
+                        num_speakers=num_speakers,
                         output_format=output_format,
                     )
-                    yield f"data: {json.dumps({'status': f'Translating to {target_language.capitalize()}…'})}\n\n"
-                    for chunk in translate_stream(client, raw_text, target_language):
-                        full_text += chunk
-                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+
+                    if target_language:
+                        # ── Phase 2a: translate via LLM ──
+                        yield f"data: {json.dumps({'status': f'Translating to {target_language.capitalize()}…'})}\n\n"
+                        for chunk in translate_stream(client, raw_text, target_language):
+                            full_text += chunk
+                            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                    else:
+                        # ── Phase 2b: diarize via LLM ──
+                        yield f"data: {json.dumps({'status': f'Formatting conversation for {num_speakers} speakers…'})}\n\n"
+                        for chunk in diarize_stream(client, raw_text, num_speakers):
+                            full_text += chunk
+                            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+
                 else:
-                    for chunk in transcribe_file(
-                        client=client,
-                        audio_path=audio_path,
-                        model=model,
-                        language=language,
-                        output_format=output_format,
-                        stream=True,
-                    ):
-                        full_text += chunk
-                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                    yield f"data: {json.dumps({'status': 'Transcribing…'})}\n\n"
+
+                    if target_language:
+                        # Collect silently — do not stream raw text to the client
+                        raw_text = transcribe_raw(
+                            client=client,
+                            audio_path=audio_path,
+                            model=model,
+                            language=language,
+                            output_format=output_format,
+                        )
+                        yield f"data: {json.dumps({'status': f'Translating to {target_language.capitalize()}…'})}\n\n"
+                        for chunk in translate_stream(client, raw_text, target_language):
+                            full_text += chunk
+                            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                    else:
+                        for chunk in transcribe_file(
+                            client=client,
+                            audio_path=audio_path,
+                            model=model,
+                            language=language,
+                            output_format=output_format,
+                            stream=True,
+                        ):
+                            full_text += chunk
+                            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
 
             with get_session() as db:
                 transcript = Transcript(

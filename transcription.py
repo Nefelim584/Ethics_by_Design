@@ -5,6 +5,8 @@ from collections.abc import Generator
 from pathlib import Path
 
 from dotenv import load_dotenv
+from google import genai as google_genai
+from google.genai import types as google_types
 from mistralai import Mistral
 from pydantic import BaseModel, Field
 
@@ -13,6 +15,9 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 _CHAT_MODEL = "mistral-large-latest"
+
+# Google models that use the Gemini API for transcription
+GOOGLE_MODELS = {"gemini-2.0-flash", "gemini-2.5-flash-preview-04-17"}
 
 SUPPORTED_LANGUAGES = {
     "english": "English",
@@ -34,6 +39,13 @@ def get_client() -> Mistral:
     if not api_key:
         raise RuntimeError("Missing MISTRAL_API_KEY environment variable.")
     return Mistral(api_key=api_key)
+
+
+def get_google_client() -> google_genai.Client:
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError("Missing GOOGLE_API_KEY environment variable.")
+    return google_genai.Client(api_key=api_key)
 
 
 def transcribe_file(
@@ -254,4 +266,74 @@ def _translate_stream(
     words = result.translated_text.split(" ")
     for i, word in enumerate(words):
         yield word if i == len(words) - 1 else word + " "
+
+
+# ── Google Gemini transcription ──────────────────────────────────
+
+def google_transcribe_raw(
+    *,
+    google_client: google_genai.Client,
+    audio_path: Path,
+    model: str = "gemini-2.0-flash",
+    language: str | None = None,
+    num_speakers: int | None = None,
+) -> str:
+    """
+    Transcribe an audio file using the Google Gemini API.
+    Returns the raw transcript text (no LLM post-processing).
+    """
+    audio_path = audio_path.expanduser().resolve()
+    if not audio_path.exists() or not audio_path.is_file():
+        raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
+    # Build the transcription prompt
+    lang_hint = f" The audio is in {SUPPORTED_LANGUAGES.get(language.lower(), language.capitalize())}." if language else ""
+    speaker_hint = (
+        f" There are {num_speakers} speakers in the conversation."
+        if num_speakers and num_speakers > 1
+        else ""
+    )
+    prompt = (
+        f"Please transcribe the audio exactly as spoken, word for word."
+        f"{lang_hint}{speaker_hint}"
+        f" Output only the raw transcript text with no commentary."
+    )
+
+    logger.info(
+        "Google STT request | model=%s | file=%s | language=%s | num_speakers=%s",
+        model, audio_path.name, language, num_speakers,
+    )
+    t0 = time.perf_counter()
+
+    # Determine MIME type from file extension
+    suffix = audio_path.suffix.lower()
+    mime_map = {
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".m4a": "audio/mp4",
+        ".ogg": "audio/ogg",
+        ".flac": "audio/flac",
+        ".webm": "audio/webm",
+        ".aac": "audio/aac",
+    }
+    mime_type = mime_map.get(suffix, "audio/mpeg")
+
+    with audio_path.open("rb") as f:
+        audio_bytes = f.read()
+
+    response = google_client.models.generate_content(
+        model=model,
+        contents=[
+            google_types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+            prompt,
+        ],
+    )
+
+    raw_text = response.text or ""
+    logger.info(
+        "Google STT response | model=%s | elapsed=%.2fs | chars=%d",
+        model, time.perf_counter() - t0, len(raw_text),
+    )
+    return raw_text
+
 
