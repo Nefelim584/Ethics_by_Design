@@ -20,9 +20,7 @@ _CHAT_MODEL = "mistral-large-latest"
 # Google models that use the Gemini API for transcription
 GOOGLE_MODELS = {
     "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-2.5-flash-preview-04-17",
-    "gemini-2.5-pro-preview-03-25",
+    "gemini-3-flash-preview",
 }
 
 # OpenAI models that use the Whisper API for transcription
